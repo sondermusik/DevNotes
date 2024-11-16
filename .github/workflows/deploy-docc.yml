@@ -1,0 +1,34 @@
+name: Deploy Swift DocC Documentation to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      # Checkout the repository code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Install dependencies if any (optional)
+      - name: Install dependencies
+        run: |
+          brew install swift
+          # Add other dependencies here if needed (e.g. packages)
+
+      # Generate DocC Documentation
+      - name: Generate DocC Documentation
+        run: |
+          # Build DocC documentation (update paths to match your project structure)
+          swift package generate-docc --output docs/
+
+      # Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs
