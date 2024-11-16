@@ -1,34 +1,111 @@
-name: Deploy Swift DocC Documentation to GitHub Pages
+# Workflow name and trigger
+name: DocC Runner
 
+# Trigger the workflow when changes are pushed to the `main` branch
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]  # Trigger only when pushing to the main branch
 
+# Define permissions required for the workflow
+permissions:
+  contents: read   # Read access to repository contents (source files, docs)
+  pages: write     # Write access to GitHub Pages for deployment of generated HTML docs
+  id-token: write  # Permission to generate authentication tokens for GitHub Pages
+
+# Concurrency: Ensures that only one workflow runs for GitHub Pages at a time.
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+# Define the jobs in this workflow
 jobs:
-  build:
-    runs-on: macos-latest
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}  # URL to the deployed site on GitHub Pages
+
+    runs-on: macos-14  # This workflow uses macOS as the runner for Xcode
 
     steps:
-      # Checkout the repository code
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      # Step 1: Checkout the repository code (including docs and source files)
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      # Install dependencies if any (optional)
-      - name: Install dependencies
+      # Step 2: Setup GitHub Pages for deployment
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      # Step 3: Get Swift version used in the project (helpful for diagnostics)
+      - name: Get Swift Version
         run: |
-          brew install swift
-          # Add other dependencies here if needed (e.g. packages)
+          echo "Swift version:"
+          swift --version
 
-      # Generate DocC Documentation
-      - name: Generate DocC Documentation
-        run: |
-          # Build DocC documentation (update paths to match your project structure)
-          swift package generate-docc --output docs/
-
-      # Deploy to GitHub Pages
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+      # Step 4: Select the appropriate Xcode version to build the documentation
+      - name: Select Xcode and Swift Version
+        uses: maxim-lobanov/setup-xcode@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs
+          xcode-version: '15.1.0'  # Ensure compatibility with your Swift project
+
+      # Step 5: Get the available schemes from your Xcode project (dynamic selection)
+      - name: Get Available Schemes
+        id: get_schemes
+        run: |
+          SCHEMES=$(xcodebuild -list -project YourProject.xcodeproj | grep "Schemes:" -A 10 | tail -n +2 | sed 's/^[[:space:]]*//')
+          echo "Available Schemes: $SCHEMES"
+          echo "selected_scheme=$(echo "$SCHEMES" | head -n 1)" >> $GITHUB_ENV  # Automatically selects the first scheme.
+
+      # Step 6: Build the DocC documentation using the selected scheme
+      - name: Build DocC Documentation
+        run: |
+          set -e  # Exit the script if any command fails
+
+          # Resolve dependencies using Swift package manager
+          echo "Resolving dependencies..."
+          swift package resolve
+
+          # Display the selected scheme
+          echo "Selected Scheme: ${{ env.selected_scheme }}"
+
+          # Use xcodebuild to build DocC documentation for the selected scheme
+          echo "Building DocC documentation..."
+          xcodebuild docbuild -scheme ${{ env.selected_scheme }} -derivedDataPath /tmp/docbuild -destination 'generic/platform=iOS'
+
+          # Process the DocC archive to prepare for static hosting
+          echo "Processing DocC archive..."
+          $(xcrun --find docc) process-archive \
+            transform-for-static-hosting /tmp/docbuild/Build/Products/Debug-iphoneos/${{ env.selected_scheme }}.doccarchive \
+            --output-path docs \
+            --hosting-base-path ${{ env.selected_scheme }}
+
+          # Ensure the Assets (CSS/JS) are copied into the `docs` directory for deployment
+          echo "Checking if Assets directory exists..."
+          if [ ! -d "MyDocs.docc/Assets" ]; then
+            echo "Error: Assets directory not found!"
+            exit 1  # Exit with error if the directory doesn't exist
+          fi
+
+          echo "Copying Assets to docs/Assets..."
+          mkdir -p docs/Assets  # Create the Assets folder in docs
+          cp -r MyDocs.docc/Assets/* docs/Assets/  # Copy CSS, JS, etc. to the generated docs folder
+
+          # Create a custom redirect in index.html to point to the main documentation
+          echo "<script>window.location.href += \"/documentation/${{ env.selected_scheme }}\"</script>" > docs/index.html
+
+      # Step 7: Upload the generated HTML docs to GitHub Pages
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'docs'  # Only the generated docs (HTML files) are uploaded to GitHub Pages.
+
+      # Step 8: Clean up any temporary files or directories
+      - name: Clean up temporary files
+        run: |
+          echo "Cleaning up..."
+          rm -rf /tmp/docbuild  # Clean up the build folder
+          rm -rf docs/Assets/*  # Clean up the assets folder, if needed
+
+      # Step 9: Deploy the docs to GitHub Pages
+      - id: deployment
+        name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
