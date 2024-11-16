@@ -49,7 +49,15 @@ jobs:
         with:
           xcode-version: '15.1.0'  # Ensure compatibility with your Swift project
 
-      # Step 5: Automatically detect if it's a Swift Package or Xcode project
+      # Step 5: Ensure the command line tools are available and `docc` can be found
+      - name: Ensure Xcode Command Line Tools
+        run: |
+          echo "Checking for xcode-select"
+          xcode-select --install || echo "xcode-select already installed"  # Install command line tools if necessary
+          echo "Checking for docc tool"
+          which docc || echo "docc tool not found"
+
+      # Step 6: Automatically detect if it's a Swift Package or Xcode project
       - name: Detect Project Type
         id: detect_project
         run: |
@@ -72,7 +80,7 @@ jobs:
             exit 1
           fi
 
-      # Step 6: Build documentation for Swift Package or Xcode project
+      # Step 7: Build documentation for Swift Package or Xcode project
       - name: Build DocC Documentation
         run: |
           set -e  # Exit the script if any command fails
@@ -123,20 +131,20 @@ jobs:
           # Create a custom redirect in index.html to point to the main documentation
           echo "<script>window.location.href += \"/documentation/${{ env.selected_scheme }}\"</script>" > docs/index.html
 
-      # Step 7: Upload the generated HTML docs to GitHub Pages
+      # Step 8: Upload the generated HTML docs to GitHub Pages
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'docs'  # Only the generated docs (HTML files) are uploaded to GitHub Pages.
 
-      # Step 8: Clean up any temporary files or directories
+      # Step 9: Clean up any temporary files or directories
       - name: Clean up temporary files
         run: |
           echo "Cleaning up..."
           rm -rf /tmp/docbuild  # Clean up the build folder
           rm -rf docs/Assets/*  # Clean up the assets folder, if needed
 
-      # Step 9: Deploy the docs to GitHub Pages
+      # Step 10: Deploy the docs to GitHub Pages
       - id: deployment
         name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
