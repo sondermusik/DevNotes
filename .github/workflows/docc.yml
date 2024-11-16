@@ -37,9 +37,11 @@ jobs:
 
       # Step 3: Get Swift version used in the project (helpful for diagnostics)
       - name: Get Swift Version
+        id: get_swift_version
         run: |
           echo "Swift version:"
           swift --version
+          echo "swift_version=$(swift --version | head -n 1 | awk '{print $3}')" >> $GITHUB_ENV  # Capture the detected Swift version
 
       # Step 4: Select the appropriate Xcode version to build the documentation
       - name: Select Xcode and Swift Version
@@ -47,49 +49,65 @@ jobs:
         with:
           xcode-version: '15.1.0'  # Ensure compatibility with your Swift project
 
-      # Step 5: Automatically find the Xcode project file
-      - name: Find Xcode Project
-        id: find_project
+      # Step 5: Automatically detect if it's a Swift Package or Xcode project
+      - name: Detect Project Type
+        id: detect_project
         run: |
-          # Automatically find the .xcodeproj file in the repository
-          PROJECT_FILE=$(find . -name "*.xcodeproj" -print -quit)
-          if [ -z "$PROJECT_FILE" ]; then
-            echo "Error: No .xcodeproj file found!"
+          # Check if Package.swift exists (indicating a Swift Package)
+          if [ -f "Package.swift" ]; then
+            echo "This is a Swift Package."
+            echo "is_swift_package=true" >> $GITHUB_ENV
+          elif [ -f "*.xcodeproj" ]; then
+            # Find the Xcode project file if it's an Xcode project
+            PROJECT_FILE=$(find . -name "*.xcodeproj" -print -quit)
+            if [ -z "$PROJECT_FILE" ]; then
+              echo "Error: No .xcodeproj file found!"
+              exit 1
+            fi
+            echo "Found Xcode project: $PROJECT_FILE"
+            echo "is_swift_package=false" >> $GITHUB_ENV
+            echo "project_file=$PROJECT_FILE" >> $GITHUB_ENV
+          else
+            echo "Error: Neither a Swift Package nor an Xcode project found!"
             exit 1
           fi
-          echo "Found Xcode project: $PROJECT_FILE"
-          echo "project_file=$PROJECT_FILE" >> $GITHUB_ENV
 
-      # Step 6: Get the available schemes from your Xcode project (dynamic selection)
-      - name: Get Available Schemes
-        id: get_schemes
-        run: |
-          SCHEMES=$(xcodebuild -list -project ${{ env.project_file }} | grep "Schemes:" -A 10 | tail -n +2 | sed 's/^[[:space:]]*//')
-          echo "Available Schemes: $SCHEMES"
-          echo "selected_scheme=$(echo "$SCHEMES" | head -n 1)" >> $GITHUB_ENV  # Automatically selects the first scheme.
-
-      # Step 7: Build the DocC documentation using the selected scheme
+      # Step 6: Build documentation for Swift Package or Xcode project
       - name: Build DocC Documentation
         run: |
           set -e  # Exit the script if any command fails
 
-          # Resolve dependencies using Swift package manager
-          echo "Resolving dependencies..."
-          swift package resolve
+          if [ "${{ env.is_swift_package }}" == "true" ]; then
+            # For Swift Package, use swift package to resolve and build documentation
+            echo "Resolving dependencies for Swift Package..."
+            swift package resolve
 
-          # Display the selected scheme
-          echo "Selected Scheme: ${{ env.selected_scheme }}"
+            echo "Building DocC documentation for Swift Package..."
+            swift run docc generate --output-path docs
 
-          # Use xcodebuild to build DocC documentation for the selected scheme
-          echo "Building DocC documentation..."
-          xcodebuild docbuild -scheme ${{ env.selected_scheme }} -derivedDataPath /tmp/docbuild -destination 'generic/platform=iOS'
+          elif [ "${{ env.is_swift_package }}" == "false" ]; then
+            # For Xcode project, use xcodebuild to build documentation
+            echo "Resolving dependencies for Xcode project..."
+            swift package resolve  # Resolve dependencies for Xcode project
 
-          # Process the DocC archive to prepare for static hosting
-          echo "Processing DocC archive..."
-          $(xcrun --find docc) process-archive \
-            transform-for-static-hosting /tmp/docbuild/Build/Products/Debug-iphoneos/${{ env.selected_scheme }}.doccarchive \
-            --output-path docs \
-            --hosting-base-path ${{ env.selected_scheme }}
+            # Get available schemes dynamically
+            SCHEMES=$(xcodebuild -list -project ${{ env.project_file }} | grep "Schemes:" -A 10 | tail -n +2 | sed 's/^[[:space:]]*//')
+            echo "Available Schemes: $SCHEMES"
+            echo "selected_scheme=$(echo "$SCHEMES" | head -n 1)" >> $GITHUB_ENV  # Automatically select the first scheme
+
+            echo "Selected Scheme: ${{ env.selected_scheme }}"
+
+            # Use xcodebuild to build DocC documentation for the selected scheme
+            echo "Building DocC documentation for Xcode project..."
+            xcodebuild docbuild -scheme ${{ env.selected_scheme }} -derivedDataPath /tmp/docbuild -destination 'generic/platform=iOS'
+
+            # Process the DocC archive to prepare for static hosting
+            echo "Processing DocC archive..."
+            $(xcrun --find docc) process-archive \
+              transform-for-static-hosting /tmp/docbuild/Build/Products/Debug-iphoneos/${{ env.selected_scheme }}.doccarchive \
+              --output-path docs \
+              --hosting-base-path ${{ env.selected_scheme }}
+          fi
 
           # Ensure the Assets (CSS/JS) are copied into the `docs` directory for deployment
           echo "Checking if Assets directory exists..."
@@ -105,20 +123,20 @@ jobs:
           # Create a custom redirect in index.html to point to the main documentation
           echo "<script>window.location.href += \"/documentation/${{ env.selected_scheme }}\"</script>" > docs/index.html
 
-      # Step 8: Upload the generated HTML docs to GitHub Pages
+      # Step 7: Upload the generated HTML docs to GitHub Pages
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'docs'  # Only the generated docs (HTML files) are uploaded to GitHub Pages.
 
-      # Step 9: Clean up any temporary files or directories
+      # Step 8: Clean up any temporary files or directories
       - name: Clean up temporary files
         run: |
           echo "Cleaning up..."
           rm -rf /tmp/docbuild  # Clean up the build folder
           rm -rf docs/Assets/*  # Clean up the assets folder, if needed
 
-      # Step 10: Deploy the docs to GitHub Pages
+      # Step 9: Deploy the docs to GitHub Pages
       - id: deployment
         name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
