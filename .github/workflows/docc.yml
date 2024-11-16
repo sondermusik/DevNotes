@@ -47,15 +47,28 @@ jobs:
         with:
           xcode-version: '15.1.0'  # Ensure compatibility with your Swift project
 
-      # Step 5: Get the available schemes from your Xcode project (dynamic selection)
+      # Step 5: Automatically find the Xcode project file
+      - name: Find Xcode Project
+        id: find_project
+        run: |
+          # Automatically find the .xcodeproj file in the repository
+          PROJECT_FILE=$(find . -name "*.xcodeproj" -print -quit)
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "Error: No .xcodeproj file found!"
+            exit 1
+          fi
+          echo "Found Xcode project: $PROJECT_FILE"
+          echo "project_file=$PROJECT_FILE" >> $GITHUB_ENV
+
+      # Step 6: Get the available schemes from your Xcode project (dynamic selection)
       - name: Get Available Schemes
         id: get_schemes
         run: |
-          SCHEMES=$(xcodebuild -list -project YourProject.xcodeproj | grep "Schemes:" -A 10 | tail -n +2 | sed 's/^[[:space:]]*//')
+          SCHEMES=$(xcodebuild -list -project ${{ env.project_file }} | grep "Schemes:" -A 10 | tail -n +2 | sed 's/^[[:space:]]*//')
           echo "Available Schemes: $SCHEMES"
           echo "selected_scheme=$(echo "$SCHEMES" | head -n 1)" >> $GITHUB_ENV  # Automatically selects the first scheme.
 
-      # Step 6: Build the DocC documentation using the selected scheme
+      # Step 7: Build the DocC documentation using the selected scheme
       - name: Build DocC Documentation
         run: |
           set -e  # Exit the script if any command fails
@@ -92,20 +105,20 @@ jobs:
           # Create a custom redirect in index.html to point to the main documentation
           echo "<script>window.location.href += \"/documentation/${{ env.selected_scheme }}\"</script>" > docs/index.html
 
-      # Step 7: Upload the generated HTML docs to GitHub Pages
+      # Step 8: Upload the generated HTML docs to GitHub Pages
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'docs'  # Only the generated docs (HTML files) are uploaded to GitHub Pages.
 
-      # Step 8: Clean up any temporary files or directories
+      # Step 9: Clean up any temporary files or directories
       - name: Clean up temporary files
         run: |
           echo "Cleaning up..."
           rm -rf /tmp/docbuild  # Clean up the build folder
           rm -rf docs/Assets/*  # Clean up the assets folder, if needed
 
-      # Step 9: Deploy the docs to GitHub Pages
+      # Step 10: Deploy the docs to GitHub Pages
       - id: deployment
         name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
